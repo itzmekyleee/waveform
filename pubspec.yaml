@@ -1,0 +1,71 @@
+name: waveform
+description: "Waveform - A premium offline music player"
+publish_to: 'none'
+version: 1.0.0+1
+
+environment:
+  sdk: ^3.12.2
+
+dependencies:
+  flutter:
+    sdk: flutter
+  cupertino_icons: ^1.0.8
+  phosphor_icons: ^3.0.1
+
+  just_audio: ^0.9.43
+  audio_service: ^0.18.17
+  on_audio_query: ^2.9.0
+  permission_handler: ^11.4.0
+  hive: ^2.2.3
+  hive_flutter: ^1.1.0
+  provider: ^6.1.2
+  path_provider: ^2.1.5
+  palette_generator: ^0.3.3
+  home_widget: ^0.9.3
+  device_info_plus: ^11.1.0
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  hive_generator: ^2.0.1
+  build_runner: ^2.4.13
+  flutter_lints: ^6.0.0
+  flutter_launcher_icons: ^0.14.3
+
+flutter:
+  uses-material-design: true
+
+  assets:
+    - assets/icons/waveform-official.png
+
+  fonts:
+    - family: Inter
+      fonts:
+        - asset: assets/fonts/Inter-Regular.otf
+          weight: 400
+        - asset: assets/fonts/Inter-Medium.otf
+          weight: 500
+        - asset: assets/fonts/Inter-SemiBold.otf
+          weight: 600
+        - asset: assets/fonts/Inter-Bold.otf
+          weight: 700
+
+flutter_launcher_icons:
+  android: true
+  ios: true
+  image_path: "assets/icons/waveform-official.png"
+  remove_alpha_ios: true
+  background_color_ios: "#0D1117"
+  min_sdk_android: 21
+  web:
+    generate: true
+    image_path: "assets/icons/waveform-official.png"
+    background_color: "#0D1117"
+    theme_color: "#0D1117"
+  windows:
+    generate: true
+    image_path: "assets/icons/waveform-official.png"
+    icon_size: 256
+  macos:
+    generate: true
+    image_path: "assets/icons/waveform-official.png"
