@@ -81,7 +81,7 @@ class AppConstants {
   static const double contentMaxWidth = 1100.0;
 
   /// Compact, elevated navigation pill used on tablets and desktop.
-  static const double floatingNavMaxWidth = 560.0;
+  static const double floatingNavMaxWidth = 460.0;
 
   /// The Up Next pane that sits beside the player on landscape tablets.
   static const double landscapeQueuePaneMinWidth = 280.0;

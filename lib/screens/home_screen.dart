@@ -40,6 +40,7 @@ class _HomeScreenState extends State<HomeScreen>
 
   static const _tabDuration = Duration(milliseconds: 300);
   static const _tabCurve = Curves.easeOutCubic;
+  static const _nowPlayingSwitchDuration = Duration(milliseconds: 360);
 
   bool _nowPlayingActive = false;
   late final AnimationController _queueSidebarController;
@@ -55,6 +56,8 @@ class _HomeScreenState extends State<HomeScreen>
   final ValueNotifier<double> _wideDragOffset = ValueNotifier(0);
   final ValueNotifier<Song?> _wideAdjacentSong = ValueNotifier(null);
   final ValueNotifier<int> _wideDragDirection = ValueNotifier(1);
+  late final SongCarouselController _wideCarousel;
+  VoidCallback? _wideSettleListener;
   late final AnimationController _wideDragSettleController;
   double _wideSettleFrom = 0;
   double _wideSettleTo = 0;
@@ -123,10 +126,24 @@ class _HomeScreenState extends State<HomeScreen>
       vsync: this,
       duration: const Duration(milliseconds: 300),
     )..addStatusListener(_handleWideVertSettleStatus);
+    _wideCarousel = SongCarouselController(
+      offset: _wideDragOffset,
+      adjacent: _wideAdjacentSong,
+      direction: _wideDragDirection,
+    );
     _wideDragSettleController = AnimationController(
       vsync: this,
       duration: const Duration(milliseconds: 320),
     )..addStatusListener(_handleWideDragSettleStatus);
+    // The settle controller must push every frame into the shared notifier,
+    // otherwise the player would only jump at the start and end of a swipe.
+    _wideSettleListener = () {
+      if (!_wideDragSettleController.isAnimating) return;
+      final t = _wideSettleCurve.transform(_wideDragSettleController.value);
+      _wideDragOffset.value =
+          _wideSettleFrom + (_wideSettleTo - _wideSettleFrom) * t;
+    };
+    _wideDragSettleController.addListener(_wideSettleListener!);
     setWideNowPlayingHost(null);
     WidgetsBinding.instance.addObserver(this);
     _searchFocus.addListener(() => setState(() {}));
@@ -162,6 +179,9 @@ class _HomeScreenState extends State<HomeScreen>
     _searchFocus.dispose();
     _queueSidebarController.dispose();
     _widePlayer?.removeListener(_onWidePlayerChanged);
+    if (_wideSettleListener != null) {
+      _wideDragSettleController.removeListener(_wideSettleListener!);
+    }
     _wideDragSettleController.removeStatusListener(_handleWideDragSettleStatus);
     _wideDragSettleController.dispose();
     _wideDragOffset.dispose();
@@ -631,13 +651,16 @@ class _HomeScreenState extends State<HomeScreen>
         final queueWidth = _queueSidebarWidthFor(width);
 
         late final Widget content;
+        late final String contentKey;
         if (twoPane) {
           content = _buildNowPlayingLandscapeLayout(theme, width);
+          contentKey = 'now_playing_landscape';
         } else if (showNowPlaying) {
           content = _buildQueueAwareContent(
             _buildNowPlayingWideLayout(theme),
             queueVisible ? queueWidth : 0.0,
           );
+          contentKey = 'now_playing';
         } else {
           content = Center(
             child: ConstrainedBox(
@@ -650,7 +673,40 @@ class _HomeScreenState extends State<HomeScreen>
               ),
             ),
           );
+          contentKey = 'library';
         }
+
+        // Opening the player slides it up over the library; closing it slides
+        // the library back down. Both orientations use the same transition.
+        final animatedContent = AnimatedSwitcher(
+          duration: _nowPlayingSwitchDuration,
+          switchInCurve: Curves.easeOutCubic,
+          switchOutCurve: Curves.easeInCubic,
+          transitionBuilder: (child, animation) {
+            final key = child.key;
+            final isPlayer = key is ValueKey<String> && key.value != 'library';
+            final begin = isPlayer
+                ? const Offset(0, 0.10)
+                : const Offset(0, -0.04);
+            return FadeTransition(
+              opacity: animation,
+              child: SlideTransition(
+                position: Tween<Offset>(
+                  begin: begin,
+                  end: Offset.zero,
+                ).animate(animation),
+                child: ScaleTransition(
+                  scale: Tween<double>(
+                    begin: isPlayer ? 0.98 : 1.02,
+                    end: 1.0,
+                  ).animate(animation),
+                  child: child,
+                ),
+              ),
+            );
+          },
+          child: KeyedSubtree(key: ValueKey(contentKey), child: content),
+        );
 
         return Row(
           children: [
@@ -658,13 +714,27 @@ class _HomeScreenState extends State<HomeScreen>
               child: Column(
                 children: [
                   Expanded(
-                    child: SafeArea(bottom: false, child: content),
+                    child: SafeArea(bottom: false, child: animatedContent),
                   ),
-                  if (!hideNav)
-                    _buildFloatingBottomBar(
-                      theme,
-                      withPlayer: !showNowPlaying,
+                  AnimatedSwitcher(
+                    duration: _nowPlayingSwitchDuration,
+                    switchInCurve: Curves.easeOutCubic,
+                    switchOutCurve: Curves.easeInCubic,
+                    transitionBuilder: (child, animation) => SizeTransition(
+                      sizeFactor: animation,
+                      alignment: Alignment.bottomCenter,
+                      child: FadeTransition(opacity: animation, child: child),
                     ),
+                    child: hideNav
+                        ? const SizedBox.shrink(key: ValueKey('navHidden'))
+                        : SizedBox(
+                            key: const ValueKey('navVisible'),
+                            child: _buildFloatingBottomBar(
+                              theme,
+                              withPlayer: !showNowPlaying,
+                            ),
+                          ),
+                  ),
                 ],
               ),
             ),
@@ -824,7 +894,7 @@ class _HomeScreenState extends State<HomeScreen>
                   ),
                   child: Column(
                     children: [
-                      _buildWideDismissChevron(),
+                      _buildWideDismissChevron(centered: false),
                       Expanded(
                         child: Row(
                           crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -947,6 +1017,7 @@ class _HomeScreenState extends State<HomeScreen>
           child: NowPlayingView(
             player: player,
             song: displayed,
+            carousel: _wideCarousel,
             adjacentSong: _wideAdjacentSong.value,
             dragOffset: _wideEffectiveOffset,
             dragDirection: _wideDragDirection.value,
@@ -991,7 +1062,7 @@ class _HomeScreenState extends State<HomeScreen>
     );
   }
 
-  Widget _buildWideDismissChevron() {
+  Widget _buildWideDismissChevron({bool centered = true}) {
     return GestureDetector(
       behavior: HitTestBehavior.opaque,
       onTap: () {
@@ -1001,7 +1072,7 @@ class _HomeScreenState extends State<HomeScreen>
       child: SizedBox(
         height: 40,
         child: Align(
-          alignment: Alignment.centerLeft,
+          alignment: centered ? Alignment.center : Alignment.centerLeft,
           child: Padding(
             padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
             child: Icon(
@@ -1079,26 +1150,9 @@ class _HomeScreenState extends State<HomeScreen>
             },
           ),
           Expanded(
-            child: AnimatedSwitcher(
-              duration: _tabDuration,
-              switchInCurve: _tabCurve,
-              switchOutCurve: _tabCurve,
-              transitionBuilder: (child, animation) {
-                return FadeTransition(
-                  opacity: animation,
-                  child: SlideTransition(
-                    position: Tween<Offset>(
-                      begin: const Offset(0.06, 0),
-                      end: Offset.zero,
-                    ).animate(animation),
-                    child: child,
-                  ),
-                );
-              },
-              child: KeyedSubtree(
-                key: ValueKey(_tabController.index),
-                child: _screens[_tabController.index],
-              ),
+            child: _TabSwitcher(
+              index: _tabController.index,
+              child: _screens[_tabController.index],
             ),
           ),
         ],
@@ -1456,7 +1510,8 @@ class _FloatingNavBar extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final isDark = theme.brightness == Brightness.dark;
-    final pillRadius = BorderRadius.circular(32);
+    final pillRadius = BorderRadius.circular(24);
+    final indicatorRadius = BorderRadius.circular(19);
 
     return Center(
       child: ConstrainedBox(
@@ -1464,25 +1519,25 @@ class _FloatingNavBar extends StatelessWidget {
           maxWidth: AppConstants.floatingNavMaxWidth,
         ),
         child: Container(
-          height: 68,
-          margin: const EdgeInsets.fromLTRB(12, 8, 12, 8),
-          padding: const EdgeInsets.all(6),
+          height: 52,
+          margin: const EdgeInsets.fromLTRB(12, 4, 12, 8),
+          padding: const EdgeInsets.all(5),
           decoration: BoxDecoration(
             color: isDark
-                ? const Color(0xFF2C2C2E).withValues(alpha: 0.94)
-                : Colors.white.withValues(alpha: 0.96),
+                ? const Color(0xFF2C2C2E).withValues(alpha: 0.9)
+                : Colors.white.withValues(alpha: 0.94),
             borderRadius: pillRadius,
             border: Border.all(
               color: isDark
-                  ? Colors.white.withValues(alpha: 0.08)
-                  : Colors.black.withValues(alpha: 0.06),
+                  ? Colors.white.withValues(alpha: 0.09)
+                  : Colors.black.withValues(alpha: 0.07),
               width: 0.5,
             ),
             boxShadow: [
               BoxShadow(
-                color: Colors.black.withValues(alpha: isDark ? 0.45 : 0.16),
-                blurRadius: 24,
-                offset: const Offset(0, 8),
+                color: Colors.black.withValues(alpha: isDark ? 0.4 : 0.14),
+                blurRadius: 18,
+                offset: const Offset(0, 6),
               ),
             ],
           ),
@@ -1502,16 +1557,17 @@ class _FloatingNavBar extends StatelessWidget {
                         width: tabWidth,
                         height: constraints.maxHeight,
                         child: Container(
+                          margin: const EdgeInsets.symmetric(vertical: 1),
                           decoration: BoxDecoration(
                             color: theme.colorScheme.primary,
-                            borderRadius: pillRadius,
+                            borderRadius: indicatorRadius,
                             boxShadow: [
                               BoxShadow(
                                 color: theme.colorScheme.primary.withValues(
-                                  alpha: 0.35,
+                                  alpha: 0.28,
                                 ),
-                                blurRadius: 12,
-                                offset: const Offset(0, 4),
+                                blurRadius: 10,
+                                offset: const Offset(0, 3),
                               ),
                             ],
                           ),
@@ -1534,31 +1590,36 @@ class _FloatingNavBar extends StatelessWidget {
                                   curve: curve,
                                 );
                               },
-                              child: AnimatedDefaultTextStyle(
+                              child: AnimatedScale(
+                                scale: isSelected ? 1.04 : 1.0,
                                 duration: duration,
                                 curve: curve,
-                                style: TextStyle(
-                                  fontSize: 11,
-                                  fontWeight: isSelected
-                                      ? FontWeight.w600
-                                      : FontWeight.w500,
-                                  color: iconColor,
-                                ),
-                                child: Column(
-                                  mainAxisAlignment: MainAxisAlignment.center,
-                                  children: [
-                                    Icon(
-                                      entries[index].$1,
-                                      size: 20,
-                                      color: iconColor,
-                                    ),
-                                    const SizedBox(height: 3),
-                                    Text(
-                                      entries[index].$2,
-                                      maxLines: 1,
-                                      overflow: TextOverflow.ellipsis,
-                                    ),
-                                  ],
+                                child: AnimatedDefaultTextStyle(
+                                  duration: duration,
+                                  curve: curve,
+                                  style: TextStyle(
+                                    fontSize: 9.5,
+                                    fontWeight: isSelected
+                                        ? FontWeight.w700
+                                        : FontWeight.w500,
+                                    color: iconColor,
+                                  ),
+                                  child: Column(
+                                    mainAxisAlignment: MainAxisAlignment.center,
+                                    children: [
+                                      Icon(
+                                        entries[index].$1,
+                                        size: 18,
+                                        color: iconColor,
+                                      ),
+                                      const SizedBox(height: 2),
+                                      Text(
+                                        entries[index].$2,
+                                        maxLines: 1,
+                                        overflow: TextOverflow.ellipsis,
+                                      ),
+                                    ],
+                                  ),
                                 ),
                               ),
                             ),
@@ -1690,6 +1751,88 @@ class _SegmentedNavBar extends StatelessWidget {
               );
             },
           ),
+        );
+      },
+    );
+  }
+}
+
+/// Tab content slides in from the direction of travel while the old screen
+/// leaves the other way. The previous AnimatedSwitcher moved both screens the
+/// same way, which made tablet tab changes feel like a glitch.
+class _TabSwitcher extends StatefulWidget {
+  final int index;
+  final Widget child;
+
+  const _TabSwitcher({required this.index, required this.child});
+
+  @override
+  State<_TabSwitcher> createState() => _TabSwitcherState();
+}
+
+class _TabSwitcherState extends State<_TabSwitcher>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _controller = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 280),
+  );
+  Widget? _previous;
+  late Widget _current = widget.child;
+  int _direction = 1;
+
+  @override
+  void didUpdateWidget(covariant _TabSwitcher oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.index != widget.index) {
+      _direction = widget.index > oldWidget.index ? 1 : -1;
+      setState(() {
+        _previous = _current;
+        _current = widget.child;
+        _controller.forward(from: 0);
+      });
+    } else {
+      // Parent rebuilds happen on every TabController tick; keep the active
+      // child fresh without restarting the transition.
+      _current = widget.child;
+    }
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final width = constraints.maxWidth;
+        return AnimatedBuilder(
+          animation: _controller,
+          builder: (context, _) {
+            final t = _controller.value;
+            final entering = Curves.easeOutCubic.transform(t);
+            final leaving = Curves.easeInCubic.transform(t);
+
+            return Stack(
+              fit: StackFit.expand,
+              children: [
+                if (_previous != null && t < 1.0)
+                  Transform.translate(
+                    offset: Offset(-_direction * width * leaving, 0),
+                    child: Opacity(
+                      opacity: 1 - t,
+                      child: IgnorePointer(child: _previous),
+                    ),
+                  ),
+                Transform.translate(
+                  offset: Offset(_direction * width * (1 - entering), 0),
+                  child: Opacity(opacity: t.clamp(0.0, 1.0), child: _current),
+                ),
+              ],
+            );
+          },
         );
       },
     );

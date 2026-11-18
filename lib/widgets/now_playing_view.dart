@@ -22,6 +22,26 @@ import 'waveform_visualizer.dart';
 
 enum NowPlayingLayout { stacked, split }
 
+/// Lets a host share its drag notifiers with [NowPlayingView] so the artwork and
+/// transport can follow a swipe without rebuilding the rest of the screen.
+class SongCarouselController {
+  const SongCarouselController({
+    required this.offset,
+    required this.adjacent,
+    required this.direction,
+  });
+
+  final ValueNotifier<double> offset;
+  final ValueNotifier<Song?> adjacent;
+  final ValueNotifier<int> direction;
+
+  Listenable get listenable => Listenable.merge([
+    offset,
+    adjacent,
+    direction,
+  ]);
+}
+
 /// Picks the composition from the box the player actually gets, not from the
 /// window size. A short landscape box (tablet held sideways, a phone on its
 /// side, a freeform window) goes side by side so the width is used instead of
@@ -49,6 +69,10 @@ class NowPlayingView extends StatelessWidget {
   /// The song sliding in from the other side, if any.
   final Song? adjacentSong;
 
+  /// Shared notifiers from the host. When supplied, they drive the carousel
+  /// instead of the static values below, so a drag only repaints the slides.
+  final SongCarouselController? carousel;
+
   final double dragOffset;
   final int dragDirection;
 
@@ -71,6 +95,7 @@ class NowPlayingView extends StatelessWidget {
     required this.player,
     required this.song,
     this.adjacentSong,
+    this.carousel,
     this.dragOffset = 0,
     this.dragDirection = 1,
     this.active = true,
@@ -88,7 +113,7 @@ class NowPlayingView extends StatelessWidget {
       child: LayoutBuilder(
         builder: (context, constraints) {
           final width = constraints.maxWidth;
-          final adjacent = adjacentSong;
+          final shared = carousel;
 
           Widget composition(
             Song s, {
@@ -110,25 +135,55 @@ class NowPlayingView extends StatelessWidget {
             );
           }
 
-          return Stack(
-            fit: StackFit.expand,
-            alignment: Alignment.center,
-            children: [
-              if (adjacent != null)
-                Transform.translate(
-                  offset: Offset(dragOffset + dragDirection * width, 0),
-                  child: composition(
-                    adjacent,
-                    isCurrent: false,
-                    playing: false,
+          Widget buildSlides(Song? next, double offset, int direction) {
+            final currentChild = composition(
+              song,
+              isCurrent: true,
+              playing: isPlaying,
+            );
+            final nextChild = next == null
+                ? null
+                : composition(next, isCurrent: false, playing: false);
+
+            return Stack(
+              fit: StackFit.expand,
+              alignment: Alignment.center,
+              children: [
+                if (nextChild != null)
+                  Transform.translate(
+                    offset: Offset(offset + direction * width, 0),
+                    child: nextChild,
                   ),
+                Transform.translate(
+                  offset: Offset(offset, 0),
+                  child: currentChild,
                 ),
-              Transform.translate(
-                offset: Offset(dragOffset, 0),
-                child: composition(song, isCurrent: true, playing: isPlaying),
-              ),
-            ],
-          );
+              ],
+            );
+          }
+
+          // The compositions are built once per song; only their transforms
+          // follow the notifiers, so a drag never rebuilds artwork or controls.
+          if (shared != null) {
+            return ValueListenableBuilder<Song?>(
+              valueListenable: shared.adjacent,
+              builder: (context, next, _) {
+                return AnimatedBuilder(
+                  animation: Listenable.merge([
+                    shared.offset,
+                    shared.direction,
+                  ]),
+                  builder: (context, _) => buildSlides(
+                    next,
+                    shared.offset.value,
+                    shared.direction.value,
+                  ),
+                );
+              },
+            );
+          }
+
+          return buildSlides(adjacentSong, dragOffset, dragDirection);
         },
       ),
     );

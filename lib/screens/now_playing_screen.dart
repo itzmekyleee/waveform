@@ -30,6 +30,8 @@ class _NowPlayingScreenState extends State<NowPlayingScreen>
   final ValueNotifier<double> _dragOffset = ValueNotifier(0);
   final ValueNotifier<Song?> _adjacentSong = ValueNotifier(null);
   final ValueNotifier<int> _direction = ValueNotifier(1);
+  late final SongCarouselController _carousel;
+  VoidCallback? _settleListener;
   final ValueNotifier<double> _vertOffset = ValueNotifier(0);
   late AnimationController _settleController;
   late AnimationController _vertSettleController;
@@ -60,10 +62,21 @@ class _NowPlayingScreenState extends State<NowPlayingScreen>
   @override
   void initState() {
     super.initState();
+    _carousel = SongCarouselController(
+      offset: _dragOffset,
+      adjacent: _adjacentSong,
+      direction: _direction,
+    );
     _settleController = AnimationController(
       vsync: this,
       duration: const Duration(milliseconds: 320),
     )..addStatusListener(_handleSettleStatus);
+    _settleListener = () {
+      if (!_settleController.isAnimating) return;
+      final t = _settleCurve.transform(_settleController.value);
+      _dragOffset.value = _settleFrom + (_settleTo - _settleFrom) * t;
+    };
+    _settleController.addListener(_settleListener!);
     _vertSettleController = AnimationController(
       vsync: this,
       duration: const Duration(milliseconds: 300),
@@ -87,6 +100,9 @@ class _NowPlayingScreenState extends State<NowPlayingScreen>
     _routeAnimation?.removeStatusListener(_handleRouteStatus);
     _player?.removeListener(_onPlayerChanged);
     _stopVertAnim();
+    if (_settleListener != null) {
+      _settleController.removeListener(_settleListener!);
+    }
     _settleController.removeStatusListener(_handleSettleStatus);
     _settleController.dispose();
     _vertSettleController.removeStatusListener(_handleVertSettleStatus);
@@ -397,11 +413,7 @@ class _NowPlayingScreenState extends State<NowPlayingScreen>
                 child: Stack(
                   children: [
                     AnimatedBuilder(
-                      animation: Listenable.merge([
-                        _dragOffset,
-                        _adjacentSong,
-                        _settleController,
-                      ]),
+                      animation: _carousel.listenable,
                       builder: (context, _) =>
                           _buildBackground(theme, player, song),
                     ),
@@ -442,6 +454,7 @@ class _NowPlayingScreenState extends State<NowPlayingScreen>
                                               child: NowPlayingView(
                                                 player: player,
                                                 song: _displayedSong ?? song,
+                                                carousel: _carousel,
                                                 adjacentSong:
                                                     _adjacentSong.value,
                                                 dragOffset: _effectiveOffset,
