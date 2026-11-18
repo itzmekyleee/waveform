@@ -1775,6 +1775,9 @@ class _TabSwitcherState extends State<_TabSwitcher>
   late final AnimationController _controller = AnimationController(
     vsync: this,
     duration: const Duration(milliseconds: 280),
+    // The first screen is already on stage; starting at 0 would leave it
+    // transparent until the first tab change animated the controller to 1.
+    value: 1,
   );
   Widget? _previous;
   late Widget _current = widget.child;
